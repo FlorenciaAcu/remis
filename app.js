@@ -2,14 +2,13 @@
 const CONFIG = {
   SPREADSHEET_ID: '1JJ4XmL9UAO8PkdS3C3fjYIIfnHNtlKZ4jcW2sJMuDJk',
   SHEET_NAME: 'SaldoMts',   // nombre de la pestaña
-  // Opcional: si preferís CSV, poné el gid y cambiá USE_GVIZ=false
-  SHEET_GID: null,
-  USE_GVIZ: true,           // usa /gviz/tq (recomendado). Si falla, intenta CSV.
-  LOGO_URL: 'https://www.juangas.com.ar/img/logo.png'
+  SHEET_GID: null,          // poné el gid si querés habilitar el fallback CSV
+  USE_GVIZ: true,           // usa /gviz/tq (recomendado)
 };
 
 // ============ HELPERS ============
 const $ = sel => document.querySelector(sel);
+
 const canon = s => String(s ?? '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -19,11 +18,12 @@ const numAR = s => {
   const t = String(s ?? '').trim();
   if (!t) return NaN;
   const n = Number(t.replace(/\./g,'').replace(/,/g,'.'));
-  return isNaN(n) ? NaN : n;
+  return Number.isFinite(n) ? n : NaN;
 };
+
 const fmtAR = n => new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2 }).format(n);
 
-// Busca índices de columnas tolerante a nombres distintos
+// Mapeo tolerante si usamos el fallback "full sheet"
 function mapIndexes(headers) {
   const H = headers.map(canon);
   const find = (...aliases) => {
@@ -41,40 +41,131 @@ function mapIndexes(headers) {
   };
 }
 
-// ============ FETCH SHEET ============
-let SHEET_CACHE = null;
-async function fetchSheet() {
-  if (SHEET_CACHE) return SHEET_CACHE;
+// ============ GVIZ: URL builders y parser ============
+function gvizUrlSelect(patente) {
+  // select A(cliente), D(saldo), B(cantidad), C(premio)
+  // lower() para comparación case-insensitive
+  const tq = `
+    select A,D,B,C
+    where lower(A) = lower('${String(patente).replace(/'/g, "\\'")}')
+    limit 1
+  `.replace(/\s+/g, ' ').trim();
 
-  const base = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}`;
-  let lastModified = null;
+  const base = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/gviz/tq`;
+  const params = new URLSearchParams({
+    tqx: 'out:json',
+    tq,
+    sheet: CONFIG.SHEET_NAME
+  });
+  return `${base}?${params.toString()}`;
+}
 
-  // 1) GViz
-  if (CONFIG.USE_GVIZ) {
-    const url = `${base}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CONFIG.SHEET_NAME)}`;
-    const res = await fetch(url, { cache: 'no-store' });
-    lastModified = res.headers.get('Last-Modified');
-    const txt = await res.text();
-    // Respuesta es: google.visualization.Query.setResponse({...});
-    const json = JSON.parse(txt.replace(/^[^{]+/, '').replace(/;?\s*$/, ''));
-    const table = json.table;
-    const headers = table.cols.map(c => c.label || '');
-    const rows = table.rows.map(r => r.c.map(c => (c ? c.v : '')));
-    SHEET_CACHE = { headers, rows, lastModified };
-    return SHEET_CACHE;
+function gvizUrlFull() {
+  const base = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/gviz/tq`;
+  const params = new URLSearchParams({
+    tqx: 'out:json',
+    sheet: CONFIG.SHEET_NAME
+  });
+  return `${base}?${params.toString()}`;
+}
+
+function extractGVizJSON(txt) {
+  // Recorta la “envoltura” google.visualization... y deja el JSON puro
+  const start = txt.indexOf('{');
+  const end   = txt.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    // pista útil cuando el doc no es público
+    if (/Sign in|Inicia sesi[oó]n|google\.com\/a\/|<html/i.test(txt)) {
+      throw new Error('No se pudo leer la hoja. Verificá que el documento sea público o esté publicado.');
+    }
+    throw new Error('Respuesta GViz inválida (no se encontró JSON interno).');
+  }
+  return JSON.parse(txt.slice(start, end + 1));
+}
+
+// ============ FETCHEO DE SALDO ============
+// Opción A (rápida): GViz con filtro por patente
+async function fetchSaldoByGViz(patente) {
+  const url = gvizUrlSelect(patente);
+  const res = await fetch(url, { cache: 'no-store' });
+  const txt = await res.text();
+
+  const json = extractGVizJSON(txt);
+  const rows = json.table?.rows ?? [];
+  if (!rows.length) return null;
+
+  // select A,D,B,C -> c[0]=cliente, c[1]=saldo, c[2]=cantidad, c[3]=premio
+  const c = rows[0].c;
+  const cliente = c[0]?.v ?? '';
+  const saldoCell = c[1]?.v;
+  const cantCell  = c[2]?.v;
+  const premCell  = c[3]?.v;
+
+  let saldo = numAR(saldoCell);
+  if (!Number.isFinite(saldo)) {
+    const cant  = numAR(cantCell);
+    const prem  = numAR(premCell);
+    saldo = (isNaN(cant) ? 0 : cant) - (isNaN(prem) ? 0 : prem);
   }
 
-  // 2) CSV (fallback)
-  const gid = CONFIG.SHEET_GID;
-  if (!gid) throw new Error('Falta SHEET_GID para usar CSV.');
-  const url = `${base}/export?format=csv&gid=${gid}`;
+  const lastModified = res.headers.get('Last-Modified');
+  return { cliente, saldo, lastModified };
+}
+
+// Opción B (fallback): leo toda la hoja por GViz y busco en front
+async function fetchSaldoByGVizFull(patente) {
+  const res = await fetch(gvizUrlFull(), { cache: 'no-store' });
+  const txt = await res.text();
+  const json = extractGVizJSON(txt);
+  const table = json.table;
+  const headers = table.cols.map(c => c.label || '');
+  const rows = table.rows.map(r => r.c.map(c => (c ? c.v : '')));
+
+  const idx = mapIndexes(headers);
+  if (idx.iCliente < 0 || (idx.iSaldo < 0 && (idx.iSuma < 0 || idx.iPremio < 0))) {
+    throw new Error('La hoja no contiene las columnas necesarias (Cliente y Saldo o Cantidad+MetroPremio).');
+  }
+
+  const row = rows.find(r => canon(r[idx.iCliente]) === canon(patente));
+  if (!row) return null;
+
+  let saldo = (idx.iSaldo >= 0) ? numAR(row[idx.iSaldo]) : NaN;
+  if (!Number.isFinite(saldo)) {
+    const suma   = numAR(row[idx.iSuma]);
+    const premio = numAR(row[idx.iPremio]);
+    saldo = (isNaN(suma) ? 0 : suma) - (isNaN(premio) ? 0 : premio);
+  }
+
+  const lastModified = res.headers.get('Last-Modified');
+  return { cliente: row[idx.iCliente], saldo, lastModified };
+}
+
+// Opción C (opcional): CSV (requiere CONFIG.SHEET_GID)
+async function fetchSaldoByCSV(patente) {
+  if (!CONFIG.SHEET_GID) return null;
+  const url = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/export?format=csv&gid=${CONFIG.SHEET_GID}`;
   const res = await fetch(url, { cache: 'no-store' });
-  lastModified = res.headers.get('Last-Modified');
   const csv = await res.text();
+
   const rows = parseCsv(csv);
   const headers = rows.shift() || [];
-  SHEET_CACHE = { headers, rows, lastModified };
-  return SHEET_CACHE;
+  const idx = mapIndexes(headers);
+  if (idx.iCliente < 0 || (idx.iSaldo < 0 && (idx.iSuma < 0 || idx.iPremio < 0))) {
+    throw new Error('La hoja CSV no contiene las columnas necesarias.');
+  }
+
+  const row = rows.find(r => canon(r[idx.iCliente]) === canon(patente));
+  if (!row) return null;
+
+  let saldo = (idx.iSaldo >= 0) ? numAR(row[idx.iSaldo]) : NaN;
+  if (!Number.isFinite(saldo)) {
+    const suma   = numAR(row[idx.iSuma]);
+    const premio = numAR(row[idx.iPremio]);
+    saldo = (isNaN(suma) ? 0 : suma) - (isNaN(premio) ? 0 : premio);
+  }
+
+  const lastModified = res.headers.get('Last-Modified');
+  return { cliente: row[idx.iCliente], saldo, lastModified };
 }
 
 // CSV simple (comillas soportadas)
@@ -101,44 +192,47 @@ function parseCsv(text){
 
 // ============ UI / LÓGICA ============
 async function consultar(patenteRaw){
-  const alertBox = $('#alert');
-  const block = $('#resultBlock');
-  const title = $('#resTitle');
-  const saldoBig = $('#saldoBig');
-  const last = $('#lastUpd');
+  const alertBox  = $('#alert');
+  const block     = $('#resultBlock');
+  const title     = $('#resTitle');
+  const saldoBig  = $('#saldoBig');
+  const last      = $('#lastUpd');
 
   alertBox.hidden = true;
   block.hidden = true;
 
   try{
-    const { headers, rows, lastModified } = await fetchSheet();
-    const idx = mapIndexes(headers);
+    const patente = String(patenteRaw || '').trim().toUpperCase();
+    if (!patente) throw new Error('Ingresá una patente.');
 
-    if (idx.iCliente < 0 || (idx.iSaldo < 0 && (idx.iSuma < 0 || idx.iPremio < 0))){
-      throw new Error('No encuentro columnas necesarias. Necesito Cliente/Patente y (Saldo o Cantidad + Metro/Premio).');
+    let data = null;
+
+    // A) rápido: GViz con filtro
+    if (CONFIG.USE_GVIZ) {
+      try { data = await fetchSaldoByGViz(patente); } catch(e){ /* probamos fallback */ }
     }
 
-    const patCanon = canon(patenteRaw);
-    const row = rows.find(r => canon(r[idx.iCliente]) === patCanon);
+    // B) fallback: GViz full
+    if (!data) {
+      try { data = await fetchSaldoByGVizFull(patente); } catch(e){ /* probamos CSV */ }
+    }
 
-    if (!row){
-      alertBox.textContent = `No encontramos registros para la patente “${patenteRaw}”. Verificá que esté sin espacios y tal como figura en tu vehículo.`;
+    // C) fallback opcional: CSV (si configuraste SHEET_GID)
+    if (!data) {
+      data = await fetchSaldoByCSV(patente);
+    }
+
+    if (!data) {
+      alertBox.textContent = `No encontramos registros para la patente “${patente}”. Verificá que esté sin espacios y tal como figura en tu vehículo.`;
       alertBox.hidden = false;
       return;
     }
 
-    let saldo = (idx.iSaldo >= 0) ? numAR(row[idx.iSaldo]) : NaN;
-    if (!(isFinite(saldo))){
-      const suma   = numAR(row[idx.iSuma]);
-      const premio = numAR(row[idx.iPremio]);
-      saldo = (isNaN(suma) ? 0 : suma) - (isNaN(premio) ? 0 : premio);
-    }
+    title.textContent = `Saldo de la patente: ${patente}`;
+    saldoBig.textContent = fmtAR(data.saldo);
 
-    title.textContent = `Saldo de la patente: ${patenteRaw.toUpperCase()}`;
-    saldoBig.textContent = fmtAR(saldo);
-
-    if (lastModified){
-      const d = new Date(lastModified);
+    if (data.lastModified){
+      const d = new Date(data.lastModified);
       last.textContent = `*Última actualización: ${d.toLocaleDateString('es-AR')} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}`;
       last.hidden = false;
     } else {
@@ -161,14 +255,13 @@ function syncUI(){
   btn.disabled = (inp.value.trim() === '');
 }
 
-function setYear(){ $('#year').textContent = new Date().getFullYear(); }
+function setYear(){ const y=$('#year'); if (y) y.textContent = new Date().getFullYear(); }
 
 window.addEventListener('DOMContentLoaded', () => {
   setYear();
 
-  // Normalización + deshabilitar botón si está vacío
-  const inp = $('#patente');
-  const btn = $('#btnConsultar');
+  const inp  = $('#patente');
+  const btn  = $('#btnConsultar');
   const form = $('#formConsulta');
 
   // Rellenar con la query si viene
@@ -179,11 +272,9 @@ window.addEventListener('DOMContentLoaded', () => {
   syncUI();
   inp.addEventListener('input', () => {
     syncUI();
-    // Ocultar resultados si borran
     if (!inp.value.trim()){
       $('#resultBlock').hidden = true;
       $('#alert').hidden = true;
-      // limpiar URL
       const url = new URL(location.href);
       url.searchParams.delete('patente');
       history.replaceState({}, '', url.pathname);
@@ -208,6 +299,5 @@ window.addEventListener('DOMContentLoaded', () => {
     btn.textContent = 'Consultar';
   });
 
-  // Si vino con ?patente=, consultá
   if (p) consultar(p);
 });
