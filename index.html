@@ -1,54 +1,64 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Consulta de Saldo</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css">
-  <meta name="theme-color" content="#223989">
-</head>
-<body>
-  <main class="wrap">
-    <section class="card">
-      <!-- Header con logo -->
-      <div class="card__header">
-        <img class="brand" src="img\logo_estacion.png" alt="JUAN GAS GNC" loading="eager">
-      </div>
-
-      <!-- Cuerpo -->
-      <div class="card__body">
-        <h1 class="title">Consultá el saldo</h1>
-        <p class="subtitle">Ingresá tu patente (sin espacios)</p>
-
-        <form id="formConsulta" class="form" action="." method="get">
-          <input id="patente" name="patente" class="input" placeholder="Ej: ABC123"
-                 autocomplete="off" autofocus>
-          <button id="btnConsultar" class="btn" type="submit">Consultar</button>
-        </form>
-
-        <div id="alert" class="alert" hidden></div>
-      </div>
-
-      <!-- Resultado -->
-      <div id="resultBlock" hidden>
-        <div class="card__divider"></div>
-        <div class="card__result">
-          <h2 id="resTitle" class="result__title"></h2>
-          <div id="saldoBig" class="result__value"></div>
-          <div id="lastUpd" class="result__meta" hidden></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Juan Gas GNC - Consultá el saldo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <meta name="theme-color" content="#223989" />
+    <link rel="icon" href="./img/favicon.ico" type="image/x-icon" />
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="card">
+        <!-- Header con logo -->
+        <div class="card__header">
+          <img
+            class="brand"
+            src="img\logo_estacion.png"
+            alt="JUAN GAS GNC"
+            loading="eager"
+          />
         </div>
-      </div>
-    </section>
-
-    <footer class="footer">
-      Copyright © <span id="year"></span>. Todos los derechos reservados.
-    </footer>
-  </main>
-
-  <script src="./app.js" defer></script>
-</body>
+        <!-- Cuerpo -->
+        <div class="card__body">
+          <h1 class="title">Consultá el saldo</h1>
+          <p class="subtitle">Ingresá tu patente (sin espacios)</p>
+          <form id="formConsulta" class="form" action="." method="get">
+            <input
+              id="patente"
+              name="patente"
+              class="input"
+              placeholder="Ej: ABC123"
+              autocomplete="off"
+              autofocus
+            />
+            <button id="btnConsultar" class="btn" type="submit">
+              Consultar
+            </button>
+          </form>
+          <div id="alert" class="alert" hidden></div>
+        </div>
+        <!-- Resultado -->
+        <div id="resultBlock" hidden>
+          <div class="card__divider"></div>
+          <div class="card__result">
+            <h2 id="resTitle" class="result__title"></h2>
+            <div id="saldoBig" class="result__value"></div>
+            <div id="lastUpd" class="result__meta" hidden></div>
+          </div>
+        </div>
+      </section>
+      <footer class="footer">
+        Copyright © <span id="year"></span>. Todos los derechos reservados.
+      </footer>
+    </main>
+    <script src="./app.js" defer></script>
+  </body>
 </html>
-
