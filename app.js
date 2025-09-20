@@ -47,18 +47,32 @@ async function fetchSheet() {
   const base = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}`;
 
   // 1) GViz
-  if (CONFIG.USE_GVIZ) {
-    const url = `${base}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CONFIG.SHEET_NAME)}`;
-    const res = await fetch(url, { cache: 'no-store' });
-    const txt = await res.text();
-    // Respuesta: google.visualization.Query.setResponse({...});
-    const json = JSON.parse(txt.replace(/^[^{]+/, '').replace(/;?\s*$/, ''));
-    const table = json.table;
-    const headers = table.cols.map(c => c.label || '');
-    const rows = table.rows.map(r => r.c.map(c => (c ? c.v : '')));
-    SHEET_CACHE = { headers, rows };
-    return SHEET_CACHE;
+if (CONFIG.USE_GVIZ) {
+  const url = `${base}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CONFIG.SHEET_NAME)}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  const txt = await res.text();
+
+  // Si devuelve HTML, suele ser permisos o URL errónea
+  const t = txt.trim();
+  if (t.startsWith('<')) {
+    throw new Error('GViz devolvió HTML (¿permiso o URL incorrecta?). Asegurá “Cualquiera con el enlace: Lector”.');
   }
+
+  // Extrae sólo el JSON entre la primera { y la última }
+  const start = txt.indexOf('{');
+  const end   = txt.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('GViz: respuesta inesperada; no se encontró el bloque JSON.');
+  }
+  const json = JSON.parse(txt.slice(start, end + 1));
+
+  const table   = json.table;
+  const headers = table.cols.map(c => c.label || '');
+  const rows    = table.rows.map(r => r.c.map(c => (c ? c.v : '')));
+  SHEET_CACHE = { headers, rows };
+  return SHEET_CACHE;
+}
+
 
   // 2) CSV (fallback)
   const gid = CONFIG.SHEET_GID;
